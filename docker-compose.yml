@@ -1,0 +1,18 @@
+services:
+  ps-price-compare:
+    build: .
+    image: ps-price-compare:latest
+    container_name: ps-price-compare
+    ports:
+      - "${PORT:-3000}:3000"
+    env_file:
+      - .env
+    environment:
+      BIND_HOST: "0.0.0.0"
+      DB_PATH: /app/data/ps-price-compare.sqlite
+    volumes:
+      - ps-price-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  ps-price-data:
