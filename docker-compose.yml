@@ -1,12 +1,13 @@
 services:
   ps-price-compare:
     build: .
-    image: ps-price-compare:latest
+    image: ${PS_LEDGER_IMAGE:-ps-price-compare:latest}
     container_name: ps-price-compare
     ports:
       - "${PORT:-3000}:3000"
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       BIND_HOST: "0.0.0.0"
       DB_PATH: /app/data/ps-price-compare.sqlite
