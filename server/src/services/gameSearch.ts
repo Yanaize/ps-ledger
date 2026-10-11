@@ -1,4 +1,4 @@
-import type { Region, SearchResultItem } from '@ps-price-compare/shared';
+import type { CurrencyCode, PriceRegion, Region, SearchResultItem } from '@ps-price-compare/shared';
 import { normalizeTitle } from '@ps-price-compare/shared';
 import type { Db } from '../db/sqlite.js';
 import {
@@ -13,13 +13,17 @@ import type { PlayStationStoreWebProvider } from '../providers/playstation/store
 import { isComparableClassification } from '../providers/playstation/storeWeb.js';
 import { REGIONS } from '../config/regions.js';
 import type { RefreshConfig } from '../config/refresh.js';
-import type { CurrencyCode } from '@ps-price-compare/shared';
+import type { PriceHistoryService } from './priceHistoryService.js';
 import { logger } from '../lib/logger.js';
 
 /** Bump when search result shape/filter changes so old noisy caches are ignored. */
 const SEARCH_CACHE_VERSION = 'v2';
 
+const HISTORY_REGIONS = new Set(['JP', 'IN', 'TR', 'IL']);
+
 export class GameSearchService {
+  private history: PriceHistoryService | null = null;
+
   constructor(
     private readonly db: Db,
     private readonly ps: PlayStationStoreWebProvider,
@@ -27,6 +31,10 @@ export class GameSearchService {
     private readonly refreshConfig: RefreshConfig,
   ) {}
 
+  /** Wired after construction to avoid circular init order issues. */
+  setPriceHistory(history: PriceHistoryService): void {
+    this.history = history;
+  }
   async search(query: string): Promise<{
     results: SearchResultItem[];
     fromCache: boolean;
@@ -123,6 +131,23 @@ export class GameSearchService {
           isFree: ed.price.isFree,
           inPlusCatalog: ed.price.inPlusCatalog,
         });
+        if (this.history && HISTORY_REGIONS.has(region)) {
+          try {
+            await this.history.recordSuccessfulPrice({
+              productId: ed.productId,
+              conceptId,
+              region: region as PriceRegion,
+              currency: (ed.price.currency as CurrencyCode) || REGIONS[region].currency,
+              baseMinor: ed.price.baseMinor,
+              discountedMinor: ed.price.discountedMinor,
+              discountPct: ed.price.discountPercent,
+              saleEndAt: ed.price.saleEndAt,
+              isFree: ed.price.isFree,
+            });
+          } catch (err) {
+            logger.warn({ err, productId: ed.productId, region }, 'Price history record failed');
+          }
+        }
       }
     }
     recordFetchAttempt(this.db, 'concept', `${region}:${conceptId}`, true);

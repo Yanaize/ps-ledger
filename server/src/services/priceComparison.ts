@@ -13,34 +13,41 @@ import {
   getManualMatch,
   getPrice,
   getProductsForConcept,
+  upsertConcept,
 } from '../db/repositories/games.js';
 import { getFetchLog } from '../db/repositories/meta.js';
+import { getPref } from '../db/repositories/catalog.js';
 import { listGiftCards } from '../db/repositories/giftcards.js';
 import { PRICE_REGIONS, REGIONS } from '../config/regions.js';
 import type { RefreshConfig } from '../config/refresh.js';
 import type { GameSearchService } from './gameSearch.js';
 import type { ExchangeService } from './exchangeService.js';
 import { matchEdition, pickPrimaryEdition } from './matching.js';
-import {
-  MinSpendFundingStrategy,
-  type CardOption,
-} from './giftCardOptimizer.js';
+import { type CardOption } from './giftCardOptimizer.js';
+import { PurchaseCostService } from './purchaseCostService.js';
+import type { WalletService } from './walletService.js';
 import type { ParsedEdition } from '../providers/playstation/storeWeb.js';
 import { logger } from '../lib/logger.js';
+import { preferLatinTitle } from '../lib/displayName.js';
 
 export class PriceComparisonService {
-  private readonly optimizer = new MinSpendFundingStrategy();
+  private readonly purchaseCost = new PurchaseCostService();
 
   constructor(
     private readonly db: Db,
     private readonly gameSearch: GameSearchService,
     private readonly exchange: ExchangeService,
     private readonly refreshConfig: RefreshConfig,
+    private readonly wallets: WalletService,
   ) {}
 
   async compare(
     conceptId: string,
-    opts: { useGiftCards?: boolean; baseProductId?: string } = {},
+    opts: {
+      useGiftCards?: boolean;
+      baseProductId?: string;
+      walletOverrides?: Record<string, number>;
+    } = {},
   ): Promise<GameComparison> {
     const useGiftCards = Boolean(opts.useGiftCards);
     const rates = await this.exchange.getSnapshot();
@@ -66,7 +73,7 @@ export class PriceComparisonService {
     // Choose base edition: prefer IN (search region), then any available
     let baseEdition: ParsedEdition | null = null;
     let baseRegion: PriceRegion | null = null;
-    for (const preferred of ['IN', 'TR', 'JP'] as PriceRegion[]) {
+    for (const preferred of ['IN', 'TR', 'JP', 'IL'] as PriceRegion[]) {
       const cr = byRegion.get(preferred)?.result;
       if (!cr) continue;
       const primary = opts.baseProductId
@@ -81,15 +88,25 @@ export class PriceComparisonService {
     }
 
     const conceptRow = getConcept(this.db, conceptId);
-    const canonicalTitle =
-      conceptRow?.canonical_title ??
-      baseEdition?.name ??
-      conceptResults.find((c) => c.result)?.result?.name ??
-      `Concept ${conceptId}`;
+    const nameCandidates = [
+      conceptRow?.canonical_title,
+      ...conceptResults.flatMap((c) =>
+        c.result ? [c.result.name, ...c.result.editions.map((e) => e.name)] : [],
+      ),
+      baseEdition?.name,
+    ];
+    let canonicalTitle = '';
+    for (const name of nameCandidates) {
+      canonicalTitle = preferLatinTitle(canonicalTitle, name);
+    }
+    if (!canonicalTitle) canonicalTitle = `Concept ${conceptId}`;
     const coverUrl =
       conceptRow?.cover_url ??
       conceptResults.find((c) => c.result?.coverUrl)?.result?.coverUrl ??
       null;
+    if (conceptRow?.canonical_title !== canonicalTitle) {
+      upsertConcept(this.db, conceptId, canonicalTitle, coverUrl);
+    }
 
     const regionComparisons: RegionComparison[] = [];
 
@@ -179,6 +196,9 @@ export class PriceComparisonService {
           directIls: null,
           giftCardEstimateIls: null,
           fundingStrategy: null,
+          truePurchaseCost: null,
+          savingsVsIsrael: null,
+          worthSwitching: null,
           coverUrl: null,
           title: null,
           freshness,
@@ -202,6 +222,9 @@ export class PriceComparisonService {
           directIls: null,
           giftCardEstimateIls: null,
           fundingStrategy: null,
+          truePurchaseCost: null,
+          savingsVsIsrael: null,
+          worthSwitching: null,
           coverUrl: null,
           title: ed.name,
           freshness,
@@ -218,39 +241,47 @@ export class PriceComparisonService {
       let giftCardEstimateIls = null;
       let fundingStrategy = null;
 
-      if (useGiftCards && directIls) {
-        const cards = listGiftCards(this.db, { region, inStockOnly: true });
-        const cardOptions: CardOption[] = [];
-        for (const c of cards) {
-          // Only use fresh/cached in-stock cards for estimates
-          const cardFresh = computeFreshness(
-            c.last_success_at,
-            c.last_checked_at,
-            this.refreshConfig.ttl.giftcards,
-            { isManual: Boolean(c.is_manual) },
-          );
-          if (
-            c.stock_status !== 'in_stock' ||
-            cardFresh.status === 'stale' ||
-            cardFresh.status === 'unavailable'
-          ) {
-            continue;
-          }
-          const priceIls =
-            c.price_currency === 'ILS'
-              ? moneyFromMinor(c.price_minor, 'ILS')
-              : convertToIls(
-                  moneyFromMinor(c.price_minor, c.price_currency as CurrencyCode),
-                  rates.rates,
-                );
-          if (!priceIls) continue;
-          cardOptions.push({
-            listingId: c.id,
-            denomination: moneyFromMinor(c.denom_minor, c.denom_currency as CurrencyCode),
-            priceIls,
-          });
-        }
-        fundingStrategy = this.optimizer.plan(nativePrice, cardOptions);
+      const override = opts.walletOverrides?.[region];
+      const walletMinor = override != null ? override : this.wallets.getMinor(region);
+      const listed = REGIONS[region].giftCards
+        ? listGiftCards(this.db, { region })
+        : [];
+      const cardOptions: CardOption[] = [];
+      for (const c of listed) {
+        const cardFresh = computeFreshness(
+          c.last_success_at,
+          c.last_checked_at,
+          this.refreshConfig.ttl.giftcards,
+          { isManual: Boolean(c.is_manual) },
+        );
+        const stale = cardFresh.status === 'stale' || cardFresh.status === 'unavailable';
+        if (c.stock_status === 'out_of_stock' || stale) continue;
+        const priceIls =
+          c.price_currency === 'ILS'
+            ? moneyFromMinor(c.price_minor, 'ILS')
+            : convertToIls(
+                moneyFromMinor(c.price_minor, c.price_currency as CurrencyCode),
+                rates.rates,
+              );
+        if (!priceIls) continue;
+        cardOptions.push({
+          listingId: c.id,
+          denomination: moneyFromMinor(c.denom_minor, c.denom_currency as CurrencyCode),
+          priceIls,
+          stockStatus: c.stock_status === 'unknown' ? 'unknown' : 'in_stock',
+        });
+      }
+
+      const truePurchaseCost = this.purchaseCost.quote({
+        nativePrice,
+        rates: rates.rates,
+        walletMinor,
+        cards: cardOptions,
+        giftCardsAvailable: REGIONS[region].giftCards,
+      });
+
+      if (useGiftCards) {
+        fundingStrategy = truePurchaseCost.funding;
         giftCardEstimateIls = fundingStrategy?.effectiveGameCostIls ?? null;
       }
 
@@ -292,6 +323,9 @@ export class PriceComparisonService {
         directIls,
         giftCardEstimateIls,
         fundingStrategy,
+        truePurchaseCost,
+        savingsVsIsrael: null,
+        worthSwitching: null,
         coverUrl: ed.coverUrl,
         title: ed.name,
         freshness,
@@ -327,6 +361,8 @@ export class PriceComparisonService {
       }
     }
 
+    applyIsraelComparison(regionComparisons, this.db);
+
     return {
       conceptId,
       canonicalTitle,
@@ -360,8 +396,82 @@ function emptyRegion(
     directIls: null,
     giftCardEstimateIls: null,
     fundingStrategy: null,
+    truePurchaseCost: null,
+    savingsVsIsrael: null,
+    worthSwitching: null,
     coverUrl: null,
     title: null,
     freshness,
   };
+}
+
+function moneyDelta(
+  baseline: { amountMinor: number } | null | undefined,
+  other: { amountMinor: number } | null | undefined,
+): { ils: ReturnType<typeof moneyFromMinor> | null; pct: number | null } {
+  if (!baseline || !other) return { ils: null, pct: null };
+  const minor = baseline.amountMinor - other.amountMinor;
+  const pct = baseline.amountMinor > 0 ? (minor / baseline.amountMinor) * 100 : null;
+  return { ils: moneyFromMinor(minor, 'ILS'), pct };
+}
+
+function shekel(minor: number): string {
+  const sign = minor < 0 ? '−' : '';
+  return `${sign}₪${(Math.abs(minor) / 100).toFixed(2)}`;
+}
+
+export function applyIsraelComparison(regions: RegionComparison[], db: Db): void {
+  const minIls = Number(getPref(db, 'minSavingsIlsMinor') ?? 3000);
+  const minPct = Number(getPref(db, 'minSavingsPct') ?? 10);
+  const israel = regions.find((r) => r.region === 'IL' && r.available);
+  for (const region of regions) {
+    if (!israel || region.region === 'IL') {
+      region.savingsVsIsrael = null;
+      region.worthSwitching = null;
+      continue;
+    }
+    const direct = moneyDelta(israel.directIls, region.directIls);
+    const truth = moneyDelta(
+      israel.truePurchaseCost?.trueCostIls,
+      region.truePurchaseCost?.trueCostIls,
+    );
+    region.savingsVsIsrael = {
+      directSavingsIls: direct.ils,
+      directSavingsPct: direct.pct,
+      trueSavingsIls: truth.ils,
+      trueSavingsPct: truth.pct,
+    };
+    const save = truth.ils ?? direct.ils;
+    const pct = truth.ils ? truth.pct : direct.pct;
+    if (!save) {
+      region.worthSwitching = null;
+      continue;
+    }
+    const usingTrue = Boolean(truth.ils);
+    const basis = usingTrue ? 'True funding cost' : 'Direct conversion';
+    if (save.amountMinor <= 0) {
+      region.worthSwitching = {
+        label: 'not_cheaper',
+        title: 'Not cheaper',
+        detail: `${basis} is ${shekel(save.amountMinor)} versus Israel.`,
+      };
+      continue;
+    }
+    const meetsIls = save.amountMinor >= minIls;
+    const meetsPct = pct != null && pct >= minPct;
+    const label = meetsIls && meetsPct ? 'excellent' : meetsIls || meetsPct ? 'good' : 'small';
+    const title =
+      label === 'excellent' ? 'Excellent savings' : label === 'good' ? 'Good savings' : 'Small savings';
+    const amountText = `${shekel(save.amountMinor)}${pct != null ? ` (${pct.toFixed(0)}%)` : ''}`;
+    const detail =
+      label === 'small'
+        ? `Only ${amountText} cheaper than Israel.`
+        : `${basis} saves ${amountText} versus Israel.`;
+    const extra = usingTrue && direct.ils
+      ? ` Direct conversion ${direct.ils.amountMinor >= 0 ? 'saves' : 'is'} ${shekel(direct.ils.amountMinor)}.`
+      : usingTrue
+        ? ''
+        : ' True funding cost is unavailable, so this uses direct conversion.';
+    region.worthSwitching = { label, title, detail: `${detail}${extra}` };
+  }
 }

@@ -58,13 +58,13 @@ export const REGIONS: Record<Region, RegionConfig> = {
     locale: 'en-il',
     countryCode: 'IL',
     languageCode: 'en',
-    priceCompare: false,
+    priceCompare: true,
     giftCards: false,
     catalog: true,
   },
 };
 
-export const PRICE_REGIONS: PriceRegion[] = ['JP', 'IN', 'TR'];
+export const PRICE_REGIONS: PriceRegion[] = ['IL', 'JP', 'IN', 'TR'];
 export const CATALOG_REGIONS: CatalogRegion[] = ['JP', 'IN', 'TR', 'IL'];
 export const GIFT_CARD_REGIONS: PriceRegion[] = ['JP', 'IN', 'TR'];
 

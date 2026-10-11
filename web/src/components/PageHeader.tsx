@@ -11,12 +11,12 @@ export function PageHeader({
 }) {
   return (
     <div className="page-header">
-      <div style={{ display: 'flex', justifyContent: 'space-between', gap: '1rem', flexWrap: 'wrap' }}>
+      <div className="page-header-body">
         <div>
           <h1 className="page-title">{title}</h1>
           {description && <p className="page-sub">{description}</p>}
         </div>
-        {actions}
+        {actions && <div className="page-actions">{actions}</div>}
       </div>
     </div>
   );

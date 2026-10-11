@@ -19,6 +19,8 @@ const envSchema = z.object({
   AUTO_REFRESH_STALE_HOURS: z.coerce.number().positive().default(12),
   /** How often the server checks for stale datasets (minutes). */
   AUTO_REFRESH_CHECK_MINUTES: z.coerce.number().positive().default(60),
+  /** How often to refresh prices for tracked games (hours). */
+  PRICE_HISTORY_INTERVAL_HOURS: z.coerce.number().positive().default(6),
   GIFTCARD_ENEBA_ENABLED: z
     .string()
     .default('true')

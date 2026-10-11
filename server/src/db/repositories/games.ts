@@ -6,6 +6,7 @@ import type {
   StoreClassification,
 } from '@ps-price-compare/shared';
 import type { Db } from '../sqlite.js';
+import { preferLatinTitle } from '../../lib/displayName.js';
 
 export interface ProductRow {
   product_id: string;
@@ -42,6 +43,8 @@ export function upsertConcept(
   coverUrl: string | null,
 ): void {
   const now = new Date().toISOString();
+  const existing = getConcept(db, conceptId);
+  const titleToStore = preferLatinTitle(existing?.canonical_title, title);
   db.prepare(
     `INSERT INTO concepts (concept_id, canonical_title, cover_url, updated_at)
      VALUES (?, ?, ?, ?)
@@ -49,7 +52,7 @@ export function upsertConcept(
        canonical_title = excluded.canonical_title,
        cover_url = COALESCE(excluded.cover_url, concepts.cover_url),
        updated_at = excluded.updated_at`,
-  ).run(conceptId, title, coverUrl, now);
+  ).run(conceptId, titleToStore, coverUrl, now);
 }
 
 export function getConcept(db: Db, conceptId: string) {

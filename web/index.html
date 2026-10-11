@@ -3,10 +3,27 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PS Ledger</title>
+    <title>PSLedger</title>
+    <link rel="icon" type="image/png" href="/logo.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet" />
+    <link href="https://fonts.googleapis.com/css2?family=Rubik:ital,wght@0,400;0,500;0,600;1,400&display=swap" rel="stylesheet" />
+    <script>
+      try {
+        var follow = localStorage.getItem('ps-ledger-follow-system') === '1';
+        var theme = localStorage.getItem('ps-ledger-theme') || 'playstation';
+        if (follow) theme = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'playstation';
+        var allowed = { signature: 1, oled: 1, midnight: 1, graphite: 1, aurora: 1, light: 1, playstation: 1 };
+        if (!allowed[theme]) theme = 'playstation';
+        document.documentElement.dataset.theme = theme;
+        document.documentElement.dataset.accent = localStorage.getItem('ps-ledger-accent') || 'theme';
+        if (localStorage.getItem('ps-ledger-contrast') === '1') document.documentElement.dataset.contrast = 'high';
+        if (document.documentElement.dataset.accent === 'custom') {
+          var hex = localStorage.getItem('ps-ledger-custom-accent');
+          if (hex) document.documentElement.style.setProperty('--accent', hex);
+        }
+      } catch (e) {}
+    </script>
   </head>
   <body>
     <div id="root"></div>

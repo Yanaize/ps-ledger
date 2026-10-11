@@ -17,6 +17,11 @@ import { PriceComparisonService } from './services/priceComparison.js';
 import { GiftCardService } from './services/giftCardService.js';
 import { CatalogService } from './services/catalogService.js';
 import { RefreshScheduler } from './services/refreshScheduler.js';
+import { PriceHistoryService } from './services/priceHistoryService.js';
+import { PriceCollector } from './services/priceCollector.js';
+import { WatchlistService } from './services/watchlistService.js';
+import { AlertService } from './services/alertService.js';
+import { WalletService } from './services/walletService.js';
 
 export interface AppContext {
   env: Env;
@@ -30,6 +35,11 @@ export interface AppContext {
   giftCards: GiftCardService;
   catalog: CatalogService;
   refresh: RefreshScheduler;
+  priceHistory: PriceHistoryService;
+  priceCollector: PriceCollector;
+  watchlist: WatchlistService;
+  alerts: AlertService;
+  wallets: WalletService;
   lanAddresses: string[];
 }
 
@@ -48,28 +58,40 @@ export function createAppContext(env: Env): AppContext {
   const psPlus = new PsPlusGamesListProvider(http);
   const exchangeProvider = createExchangeProviders(http, providerCfg.exchangeProviders);
   const exchange = new ExchangeService(db, exchangeProvider, refreshConfig);
+  const priceHistory = new PriceHistoryService(db, exchange);
   const gameSearch = new GameSearchService(
     db,
     ps,
     providerCfg.psSearchRegion,
     refreshConfig,
   );
+  gameSearch.setPriceHistory(priceHistory);
+  const wallets = new WalletService(db);
   const priceComparison = new PriceComparisonService(
     db,
     gameSearch,
     exchange,
     refreshConfig,
+    wallets,
   );
   const giftProviders = createGiftCardRegistry(http, providerCfg.enebaEnabled);
   const giftCards = new GiftCardService(db, giftProviders, exchange, refreshConfig);
   const catalog = new CatalogService(db, psPlus, refreshConfig);
-  // Seed curated popular rankings from any catalog already on disk
   try {
     catalog.reseedCuratedPopular();
   } catch {
     /* empty DB on first boot */
   }
   const refresh = new RefreshScheduler(db, refreshConfig, exchange, giftCards, catalog);
+  const priceCollector = new PriceCollector(
+    db,
+    gameSearch,
+    priceHistory,
+    refreshConfig.priceHistoryIntervalMs,
+  );
+  const watchlist = new WatchlistService(db, priceHistory, exchange);
+  const alerts = new AlertService(db);
+  priceHistory.setOnPriceChanged((event) => alerts.evaluate(event));
 
   return {
     env,
@@ -83,6 +105,11 @@ export function createAppContext(env: Env): AppContext {
     giftCards,
     catalog,
     refresh,
+    priceHistory,
+    priceCollector,
+    watchlist,
+    alerts,
+    wallets,
     lanAddresses: listLanAddresses(),
   };
 }

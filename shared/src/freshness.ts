@@ -1,5 +1,10 @@
 import type { Freshness, FreshnessStatus } from './types.js';
 
+/** Capitalize the first letter of every word, including after dashes. */
+function titleCase(text: string): string {
+  return text.replace(/(^|[\s—–-])([a-z])/g, (_, sep: string, ch: string) => sep + ch.toUpperCase());
+}
+
 export function computeFreshness(
   lastSuccessAt: string | null,
   lastAttemptAt: string | null,
@@ -12,9 +17,11 @@ export function computeFreshness(
       status: 'manual',
       lastSuccessAt,
       lastAttemptAt,
-      label: lastSuccessAt
-        ? `Manual entry — recorded ${formatRelative(now.getTime() - new Date(lastSuccessAt).getTime())}`
-        : 'Manual entry',
+      label: titleCase(
+        lastSuccessAt
+          ? `Manual entry — recorded ${formatRelative(now.getTime() - new Date(lastSuccessAt).getTime())}`
+          : 'Manual entry',
+      ),
       ageMs: lastSuccessAt ? now.getTime() - new Date(lastSuccessAt).getTime() : null,
     };
   }
@@ -24,9 +31,11 @@ export function computeFreshness(
       status: 'unavailable',
       lastSuccessAt: null,
       lastAttemptAt,
-      label: lastAttemptAt
-        ? `Unavailable — last attempt ${formatAbsolute(lastAttemptAt)}`
-        : 'Unavailable',
+      label: titleCase(
+        lastAttemptAt
+          ? `Unavailable — last attempt ${formatAbsolute(lastAttemptAt)}`
+          : 'Unavailable',
+      ),
       ageMs: null,
     };
   }
@@ -52,7 +61,7 @@ export function computeFreshness(
     label = `Stale — last successful update ${formatAbsolute(lastSuccessAt)}`;
   }
 
-  return { status, lastSuccessAt, lastAttemptAt, label, ageMs };
+  return { status, lastSuccessAt, lastAttemptAt, label: titleCase(label), ageMs };
 }
 
 export function formatRelative(ageMs: number): string {

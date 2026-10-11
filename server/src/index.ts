@@ -22,21 +22,30 @@ async function main() {
 
   const webDist = path.join(rootDir, 'web', 'dist');
   if (fs.existsSync(webDist)) {
-    // wildcard:true serves newly-built hashed assets without a server restart.
-    // (wildcard:false snapshots files at boot — a vite rebuild then 404s JS → blank UI)
+    // Hashed assets can be cached; the HTML shell must not be — it points at those hashes.
     await app.register(fastifyStatic, {
       root: webDist,
       prefix: '/',
       wildcard: true,
+      index: false,
       maxAge: '7d',
       immutable: true,
+      setHeaders(res, filePath) {
+        if (filePath.endsWith('.html')) {
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        }
+      },
     });
+    const sendIndex = (reply: import('fastify').FastifyReply) => {
+      reply.header('Cache-Control', 'no-cache, no-store, must-revalidate');
+      return reply.sendFile('index.html');
+    };
+    app.get('/', async (_req, reply) => sendIndex(reply));
     app.setNotFoundHandler((req, reply) => {
       if (req.url.startsWith('/api/')) {
         return reply.status(404).send({ error: 'NOT_FOUND', message: 'API route not found' });
       }
-      // SPA client routes — never cache index.html
-      return reply.sendFile('index.html', { maxAge: 0, immutable: false });
+      return sendIndex(reply);
     });
   } else {
     app.get('/', async (_req, reply) => {
@@ -52,9 +61,11 @@ async function main() {
   await app.listen({ port: env.PORT, host: env.BIND_HOST });
 
   ctx.refresh.startAutoRefresh();
+  ctx.priceCollector.start();
 
   const shutdown = () => {
     ctx.refresh.stopAutoRefresh();
+    ctx.priceCollector.stop();
   };
   process.once('SIGINT', shutdown);
   process.once('SIGTERM', shutdown);

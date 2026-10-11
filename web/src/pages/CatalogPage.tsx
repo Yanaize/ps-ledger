@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { CatalogRegion } from '@ps-price-compare/shared';
@@ -24,20 +24,25 @@ type View =
 
 type SortKey = 'name' | 'regions' | 'popular';
 
-const ROW_HEIGHT = 48;
-
-const VIEW_CHIPS: { id: View; label: string }[] = [
-  { id: 'full', label: 'Full catalog' },
-  { id: 'differences', label: 'Regional differences' },
-  { id: 'popular', label: 'Popular' },
-  { id: 'all_regions', label: 'All four regions' },
-];
+const ROW_HEIGHT = 52;
+const CARD_HEIGHT = 96;
 
 export function CatalogPage() {
   const [view, setView] = useState<View>('full');
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState<SortKey>('name');
   const [hidden, setHidden] = useState<CatalogRegion[]>([]);
+  const [narrow, setNarrow] = useState(() =>
+    typeof window !== 'undefined' && window.matchMedia('(max-width: 900px)').matches,
+  );
+
+  useEffect(() => {
+    const mq = window.matchMedia('(max-width: 900px)');
+    const onChange = () => setNarrow(mq.matches);
+    onChange();
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
 
   const params = new URLSearchParams({
     view,
@@ -60,7 +65,7 @@ export function CatalogPage() {
   const rowVirtualizer = useVirtualizer({
     count: games.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => ROW_HEIGHT,
+    estimateSize: () => (narrow ? CARD_HEIGHT : ROW_HEIGHT),
     overscan: 12,
   });
 
@@ -80,67 +85,63 @@ export function CatalogPage() {
         description="Availability matrix across Japan, India, Turkey, and Israel. Use Regional differences to find titles that are not listed everywhere."
       />
 
-      <div className="filter-bar">
-        {VIEW_CHIPS.map((chip) => (
-          <button
-            key={chip.id}
-            type="button"
-            className={`filter-chip ${view === chip.id ? 'active' : ''}`}
-            onClick={() => setView(chip.id)}
-          >
-            {chip.label}
-          </button>
-        ))}
-        <select
-          className="select"
-          value={['JP', 'IN', 'TR', 'IL'].includes(view) ? view : ''}
-          onChange={(e) => {
-            const v = e.target.value;
-            if (v) setView(v as CatalogRegion);
-          }}
-          aria-label="Single-region only filter"
-        >
-          <option value="">Region-only…</option>
-          <option value="JP">Japan only</option>
-          <option value="IN">India only</option>
-          <option value="TR">Turkey only</option>
-          <option value="IL">Israel only</option>
-        </select>
-        <div style={{ flex: 1, minWidth: 180, maxWidth: 280 }}>
-          <SearchField
-            value={search}
-            onChange={setSearch}
-            placeholder="Search games…"
-            aria-label="Search catalog by game name"
-          />
-        </div>
-        <select
-          className="select"
-          value={sort}
-          onChange={(e) => setSort(e.target.value as SortKey)}
-          aria-label="Sort catalog"
-        >
-          <option value="name">Sort A–Z</option>
-          <option value="regions">Sort by # of regions</option>
-          <option value="popular">Sort by most popular</option>
-        </select>
-      </div>
-
-      <div className="filter-bar" style={{ marginTop: '-0.5rem' }}>
-        {(['JP', 'IN', 'TR', 'IL'] as CatalogRegion[]).map((r) => (
-          <label key={r} className="check-label">
-            <input
-              type="checkbox"
-              checked={!hidden.includes(r)}
-              onChange={(e) => {
-                setHidden((prev) =>
-                  e.target.checked ? prev.filter((x) => x !== r) : [...prev, r],
-                );
-              }}
-            />
-            {REGION_NAMES[r]}
+      <div className="catalog-toolbar">
+        <SearchField
+          value={search}
+          onChange={setSearch}
+          placeholder="Search games…"
+          aria-label="Search catalog by game name"
+        />
+        <div className="catalog-toolbar-row">
+          <label className="sort-field">
+            <span className="gc-amount-label">Show</span>
+            <select
+              className="select"
+              value={view}
+              onChange={(e) => setView(e.target.value as View)}
+              aria-label="Show"
+            >
+              <option value="full">Full catalog</option>
+              <option value="differences">Regional differences</option>
+              <option value="popular">Popular</option>
+              <option value="all_regions">All four regions</option>
+              <option value="JP">Japan only</option>
+              <option value="IN">India only</option>
+              <option value="TR">Turkey only</option>
+              <option value="IL">Israel only</option>
+            </select>
           </label>
-        ))}
+          <label className="sort-field">
+            <span className="gc-amount-label">Sort</span>
+            <select
+              className="select"
+              value={sort}
+              onChange={(e) => setSort(e.target.value as SortKey)}
+              aria-label="Sort catalog"
+            >
+              <option value="name">A–Z</option>
+              <option value="regions">Number of regions</option>
+              <option value="popular">Most popular</option>
+            </select>
+          </label>
+        </div>
+        <div className="column-toggles">
+          <span className="gc-amount-label">Columns</span>
+          {(['JP', 'IN', 'TR', 'IL'] as CatalogRegion[]).map((r) => (
+            <label key={r} className="check-label">
+              <input
+                type="checkbox"
+                checked={!hidden.includes(r)}
+                onChange={(e) => {
+                  setHidden((prev) =>
+                    e.target.checked ? prev.filter((x) => x !== r) : [...prev, r],
+                  );
+                }}
+              />
+              {REGION_NAMES[r]}
+            </label>
+          ))}
+        </div>
       </div>
 
       {q.data && (
@@ -152,7 +153,9 @@ export function CatalogPage() {
             <strong style={{ color: 'var(--text)', fontWeight: 600 }}>{q.data.totalCount}</strong>{' '}
             games
           </span>
-          {q.data.regions.map((r) => (
+          {q.data.regions
+            .filter((r) => q.data!.lastUpdated[r].status !== 'fresh')
+            .map((r) => (
             <span key={r} style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
               {REGION_NAMES[r]}
               <FreshnessBadge freshness={q.data!.lastUpdated[r]} />
@@ -174,9 +177,42 @@ export function CatalogPage() {
         />
       )}
 
-      {games.length > 0 && (
+      {games.length > 0 && narrow && (
+        <div className="catalog-cards">
+          {games.map((g) => (
+            <article key={g.conceptId} className="catalog-card">
+              <div className="catalog-card-name" title={g.nameEn && g.nameEn !== g.name ? g.nameEn : g.name}>
+                {g.name}
+                {g.isStarred && <span className="badge accent">Starred</span>}
+                {g.isPopular && !g.isStarred && <span className="badge neutral">Popular</span>}
+              </div>
+              <div className="catalog-card-regions">
+                {visibleCols.map((r) => {
+                  const yes = g.availability[r];
+                  return (
+                    <span key={r} className={yes ? 'yes' : 'no'}>
+                      {REGION_NAMES[r]} {yes ? '✓' : '–'}
+                    </span>
+                  );
+                })}
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+
+      {games.length > 0 && !narrow && (
+        <>
+        <p className="scroll-hint">Swipe sideways to see every column.</p>
         <div className="table-wrap catalog-scroll" ref={parentRef}>
           <table className="data catalog-table">
+            <colgroup>
+              <col className="catalog-col-game" />
+              {visibleCols.map((r) => (
+                <col key={r} className="catalog-col-region" />
+              ))}
+              <col className="catalog-col-count" />
+            </colgroup>
             <thead>
               <tr>
                 <th className="sticky">Game</th>
@@ -226,7 +262,7 @@ export function CatalogPage() {
                             <span className="avail-icon" aria-hidden>
                               {yes ? '✓' : '–'}
                             </span>
-                            <span className="sr-only">{yes ? 'Yes' : 'No'}</span>
+                            <span className="avail-label">{yes ? 'Yes' : 'No'}</span>
                           </span>
                         </td>
                       );
@@ -246,6 +282,7 @@ export function CatalogPage() {
             </tbody>
           </table>
         </div>
+        </>
       )}
     </div>
   );

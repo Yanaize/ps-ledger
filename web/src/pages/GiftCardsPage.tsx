@@ -4,19 +4,17 @@ import {
   formatMoney,
   toMajor,
   type GiftCardListing,
-  type PriceRegion,
 } from '@ps-price-compare/shared';
 import { api } from '../api/client';
 import { FreshnessBadge } from '../components/FreshnessBadge';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState, ErrorState, LoadingState } from '../components/EmptyState';
 
-const REGIONS: PriceRegion[] = ['JP', 'IN', 'TR'];
+type GiftRegion = 'JP' | 'IN' | 'TR';
 
-const REGION_META: Record<
-  PriceRegion,
-  { name: string; currency: string; symbol: string }
-> = {
+const REGIONS: GiftRegion[] = ['JP', 'IN', 'TR'];
+
+const REGION_META: Record<GiftRegion, { name: string; currency: string; symbol: string }> = {
   JP: { name: 'Japan', currency: 'JPY', symbol: '¥' },
   IN: { name: 'India', currency: 'INR', symbol: '₹' },
   TR: { name: 'Turkey', currency: 'TRY', symbol: '₺' },
@@ -42,16 +40,16 @@ function pickBest(listings: GiftCardListing[]): GiftCardListing | null {
 
 function stockLabel(l: GiftCardListing): { text: string; tone: string } {
   if (l.freshness.status === 'stale' || l.freshness.status === 'unavailable') {
-    return { text: 'Stale data', tone: 'stale' };
+    return { text: 'Stale Data', tone: 'stale' };
   }
-  if (l.stockStatus === 'in_stock') return { text: 'In stock', tone: 'in_stock' };
-  if (l.stockStatus === 'out_of_stock') return { text: 'Out of stock', tone: 'out_of_stock' };
-  return { text: 'Stock unknown', tone: 'unknown' };
+  if (l.stockStatus === 'in_stock') return { text: 'In Stock', tone: 'in_stock' };
+  if (l.stockStatus === 'out_of_stock') return { text: 'Out Of Stock', tone: 'out_of_stock' };
+  return { text: 'Stock Unknown', tone: 'unknown' };
 }
 
 export function GiftCardsPage() {
   const qc = useQueryClient();
-  const [selectedDenom, setSelectedDenom] = useState<Record<PriceRegion, number | null>>({
+  const [selectedDenom, setSelectedDenom] = useState<Record<GiftRegion, number | null>>({
     JP: null,
     IN: null,
     TR: null,
@@ -77,15 +75,15 @@ export function GiftCardsPage() {
   });
 
   const byRegion = useMemo(() => {
-    const map: Record<PriceRegion, GiftCardListing[]> = { JP: [], IN: [], TR: [] };
+    const map: Record<GiftRegion, GiftCardListing[]> = { JP: [], IN: [], TR: [] };
     for (const l of listingsQ.data?.listings ?? []) {
-      map[l.region].push(l);
+      if (l.region === 'JP' || l.region === 'IN' || l.region === 'TR') map[l.region].push(l);
     }
     return map;
   }, [listingsQ.data]);
 
   const denomsByRegion = useMemo(() => {
-    const out: Record<PriceRegion, number[]> = { JP: [], IN: [], TR: [] };
+    const out: Record<GiftRegion, number[]> = { JP: [], IN: [], TR: [] };
     for (const region of REGIONS) {
       const set = new Set<number>();
       for (const l of byRegion[region]) set.add(l.denomination.amountMinor);
@@ -130,7 +128,7 @@ export function GiftCardsPage() {
   }, [summaryQ.data]);
 
   const bestRates = useMemo(() => {
-    const rates: Partial<Record<PriceRegion, number>> = {};
+    const rates: Partial<Record<GiftRegion, number>> = {};
     for (const region of REGIONS) {
       const denom = selectedDenom[region];
       if (denom == null) continue;
@@ -141,7 +139,7 @@ export function GiftCardsPage() {
   }, [byRegion, selectedDenom]);
 
   const cheapestRegion = useMemo(() => {
-    let best: PriceRegion | null = null;
+    let best: GiftRegion | null = null;
     let bestRate = Infinity;
     for (const region of REGIONS) {
       const r = bestRates[region];
@@ -203,7 +201,6 @@ export function GiftCardsPage() {
                     <h3>{meta.name}</h3>
                     <div className="gc-currency">{meta.currency} wallet</div>
                   </div>
-                  {isBestRegion && <span className="badge ok">Best rate</span>}
                 </div>
 
                 <label className="gc-amount">
@@ -239,7 +236,7 @@ export function GiftCardsPage() {
                         : best.effectiveRatePer1000 != null && denom != null
                           ? `₪${((best.effectiveRatePer1000 * toMajor({ amountMinor: denom, currency: best.denomination.currency })) / 1000).toFixed(2)}`
                           : formatMoney(best.price)}
-                      <span className="gc-price-note">Best available purchase</span>
+                      <span className="gc-price-note"> — Best available purchase</span>
                     </div>
 
                     <div className="gc-details">
@@ -286,7 +283,9 @@ export function GiftCardsPage() {
                     </div>
 
                     <div className="gc-footer">
-                      <FreshnessBadge freshness={best.freshness} />
+                      {best.freshness.status !== 'fresh' && (
+                        <FreshnessBadge freshness={best.freshness} />
+                      )}
                       <a
                         className="btn sm"
                         href={best.productUrl}
@@ -331,7 +330,7 @@ function ManualEntryForm({
   onSubmit: (body: Record<string, unknown>) => void;
   busy: boolean;
 }) {
-  const [region, setRegion] = useState<PriceRegion>('JP');
+  const [region, setRegion] = useState<GiftRegion>('JP');
   const [denom, setDenom] = useState('10000');
   const [seller, setSeller] = useState('');
   const [url, setUrl] = useState('');
@@ -351,11 +350,11 @@ function ManualEntryForm({
           </p>
         </div>
       </div>
-      <div className="filter-bar" style={{ marginBottom: 0 }}>
+      <div className="filter-bar stack-controls" style={{ marginBottom: 0 }}>
         <select
           className="select"
           value={region}
-          onChange={(e) => setRegion(e.target.value as PriceRegion)}
+          onChange={(e) => setRegion(e.target.value as GiftRegion)}
         >
           <option value="JP">Japan</option>
           <option value="IN">India</option>

@@ -3,8 +3,17 @@ import { api } from '../api/client';
 import { FreshnessBadge } from '../components/FreshnessBadge';
 import { PageHeader } from '../components/PageHeader';
 import { LoadingState, ErrorState } from '../components/EmptyState';
-import { computeFreshness } from '@ps-price-compare/shared';
+import { formatMoney, moneyFromMajor, moneyFromMinor, computeFreshness } from '@ps-price-compare/shared';
+import { THEME_META, THEMES, applyAppearance, readStoredAppearance, type AccentId } from '../theme';
+import { LOCAL_WALLET_REGIONS, readWallets, writeWallet, type LocalWalletRegion } from '../localWallets';
 import { useState } from 'react';
+
+const WALLET_NAMES: Record<string, string> = {
+  IL: 'Israel',
+  JP: 'Japan',
+  IN: 'India',
+  TR: 'Turkey',
+};
 
 const DATASETS: {
   id: 'prices' | 'giftcards' | 'catalog' | 'rates';
@@ -14,35 +23,38 @@ const DATASETS: {
   { id: 'prices', title: 'Game prices', group: 'PlayStation Store' },
   { id: 'catalog', title: 'PS Plus Extra catalog', group: 'PS Plus' },
   { id: 'giftcards', title: 'Gift card listings', group: 'Gift cards' },
-  { id: 'rates', title: 'Exchange rates', group: 'FX' },
+  { id: 'rates', title: 'Currency rates', group: 'Shekels' },
 ];
 
 export function SettingsPage() {
   const qc = useQueryClient();
   const statusQ = useQuery({ queryKey: ['status'], queryFn: api.status });
-  const ratesQ = useQuery({ queryKey: ['rates'], queryFn: api.rates });
-  const prefsQ = useQuery({ queryKey: ['prefs'], queryFn: api.prefs });
-  const [message, setMessage] = useState<string | null>(null);
-  const [messageTone, setMessageTone] = useState<'ok' | 'warn' | 'error'>('ok');
-  const [starInput, setStarInput] = useState('');
+  const [appearance, setAppearance] = useState(readStoredAppearance);
+  const [wallets, setWallets] = useState(readWallets);
+  const [walletDraft, setWalletDraft] = useState<Record<string, string>>({});
+  const [throttledTarget, setThrottledTarget] = useState<string | null>(null);
 
   const refresh = useMutation({
     mutationFn: (dataset: string) => api.refresh(dataset),
-    onSuccess: (res) => {
-      setMessageTone(res.throttled ? 'warn' : res.ok ? 'ok' : 'error');
-      setMessage(res.throttled ? `Throttled: ${res.message}` : res.message);
+    onSuccess: (res, dataset) => {
+      setThrottledTarget(res.throttled ? dataset : null);
       qc.invalidateQueries();
-    },
-    onError: (err) => {
-      setMessageTone('error');
-      setMessage((err as Error).message);
     },
   });
 
-  const savePrefs = useMutation({
-    mutationFn: api.setPrefs,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['prefs'] }),
-  });
+  const saveWallet = (region: LocalWalletRegion, currency: 'ILS' | 'JPY' | 'INR' | 'TRY', shown: string) => {
+    const raw = Number(shown === '' ? 0 : shown);
+    if (!Number.isFinite(raw) || raw < 0) return;
+    const minor = currency === 'JPY' ? Math.round(raw) : moneyFromMajor(raw, currency).amountMinor;
+    writeWallet(region, minor);
+    setWallets(readWallets());
+    setWalletDraft((prev) => {
+      const next = { ...prev };
+      delete next[region];
+      return next;
+    });
+    qc.invalidateQueries({ queryKey: ['compare'] });
+  };
 
   const ds = statusQ.data?.datasets ?? {};
 
@@ -55,6 +67,11 @@ export function SettingsPage() {
     );
   }
 
+  function commitAppearance(input: Parameters<typeof applyAppearance>[0]) {
+    applyAppearance(input);
+    setAppearance(readStoredAppearance());
+  }
+
   function formatWhen(iso: string | null | undefined) {
     if (!iso) return 'Never';
     return new Date(iso).toLocaleString();
@@ -63,28 +80,24 @@ export function SettingsPage() {
   return (
     <div>
       <PageHeader
-        title="Settings / Data"
-        description="Manage dataset freshness and preferences. Sources older than half a day refresh automatically in the background."
+        title="Settings"
+        description="Appearance and wallet balances are saved on this browser only."
         actions={
-          <button
-            type="button"
-            className="btn primary"
-            disabled={refresh.isPending}
-            onClick={() => refresh.mutate('all')}
-          >
-            {refresh.isPending ? 'Refreshing…' : 'Refresh all'}
-          </button>
+          <>
+            {throttledTarget === 'all' && (
+              <span className="throttle-note">Throttled, please try again in a bit.</span>
+            )}
+            <button
+              type="button"
+              className="btn primary"
+              disabled={refresh.isPending}
+              onClick={() => refresh.mutate('all')}
+            >
+              {refresh.isPending ? 'Refreshing…' : 'Refresh all'}
+            </button>
+          </>
         }
       />
-
-      {message && (
-        <div className={`alert ${messageTone === 'error' ? 'error' : messageTone === 'warn' ? 'warn' : ''}`}>
-          <span className={`badge ${messageTone === 'ok' ? 'ok' : messageTone === 'warn' ? 'warn' : 'danger'}`}>
-            {messageTone === 'ok' ? 'Updated' : messageTone === 'warn' ? 'Note' : 'Failed'}
-          </span>
-          <span className="text-secondary">{message}</span>
-        </div>
-      )}
 
       {statusQ.isLoading && <LoadingState label="Loading server status…" />}
       {statusQ.isError && (
@@ -92,75 +105,150 @@ export function SettingsPage() {
       )}
 
       <div className="settings-stack">
-        <section>
-          <p className="section-title">Datasets</p>
+        <section className="panel span-all">
+          <div className="panel-header">
+            <div>
+              <h3>Appearance</h3>
+              <p className="muted" style={{ margin: '0.35rem 0 0', fontSize: '0.85rem' }}>
+                The layout stays the same. A theme changes the room.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="btn sm"
+              onClick={() => {
+                commitAppearance({ theme: 'playstation', accent: 'theme', followSystem: false, highContrast: false });
+              }}
+            >
+              Restore default appearance
+            </button>
+          </div>
+          <div className="theme-grid">
+            {THEMES.map((id) => {
+              const meta = THEME_META[id];
+              const selected = (appearance.theme ?? 'playstation') === id && !appearance.followSystem;
+              return (
+                <button
+                  key={id}
+                  type="button"
+                  className={`theme-card ${selected ? 'selected' : ''}`}
+                  onClick={() => {
+                    commitAppearance({
+                      theme: id,
+                      accent: appearance.accent as AccentId,
+                      followSystem: false,
+                      highContrast: appearance.highContrast,
+                      customAccent: appearance.customAccent,
+                    });
+                  }}
+                >
+                  <span className="theme-swatch" style={{ background: meta.bg, color: meta.text, borderColor: meta.surface }}>
+                    <span style={{ background: meta.surface }} />
+                    <i style={{ background: meta.accent }} />
+                  </span>
+                  {meta.name}
+                </button>
+              );
+            })}
+          </div>
+          <div className="appearance-options">
+            <button
+              type="button"
+              className={`toggle-row ${appearance.followSystem ? 'on' : ''}`}
+              aria-pressed={appearance.followSystem}
+              onClick={() => {
+                commitAppearance({
+                  theme: appearance.theme,
+                  accent: appearance.accent as AccentId,
+                  followSystem: !appearance.followSystem,
+                  highContrast: appearance.highContrast,
+                  customAccent: appearance.customAccent,
+                });
+              }}
+            >
+              <span className="toggle-switch" aria-hidden><i /></span>
+              <span>Follow system appearance</span>
+            </button>
+            <button
+              type="button"
+              className={`toggle-row ${appearance.highContrast ? 'on' : ''}`}
+              aria-pressed={appearance.highContrast}
+              onClick={() => {
+                commitAppearance({
+                  theme: appearance.theme,
+                  accent: appearance.accent as AccentId,
+                  followSystem: appearance.followSystem,
+                  highContrast: !appearance.highContrast,
+                  customAccent: appearance.customAccent,
+                });
+              }}
+            >
+              <span className="toggle-switch" aria-hidden><i /></span>
+              <span>High contrast on this theme</span>
+            </button>
+          </div>
+        </section>
+        <section className="panel span-all">
+          <div className="panel-header">
+            <div>
+              <h3>Data</h3>
+              <p className="muted" style={{ margin: '0.35rem 0 0', fontSize: '0.85rem' }}>
+                Store prices, PS Plus, gift cards, and shekel rates. Refresh one source, or use Refresh all above.
+              </p>
+            </div>
+          </div>
           <div className="dataset-list">
             {DATASETS.map((d) => {
               const job = ds[d.id];
               const fresh = datasetFreshness(d.id);
               return (
-                <div key={d.id} className="dataset-row">
+                <div key={d.id} className={`dataset-row${throttledTarget === d.id ? ' is-throttled' : ''}`}>
                   <div>
                     <div className="name">{d.title}</div>
                     <div className="meta">{d.group}</div>
                   </div>
-                  <div>
+                  <div className="dataset-status">
                     <FreshnessBadge freshness={fresh} />
-                    <div className="meta" style={{ marginTop: 6 }}>
+                    <div className="meta">
                       Last success: {formatWhen(job?.lastSuccessAt)}
                     </div>
                   </div>
-                  <div className="meta">
-                    {job?.status === 'running' ? (
-                      <span className="badge accent">In progress</span>
-                    ) : job?.status === 'error' ? (
-                      <span className="badge danger">Error</span>
-                    ) : job?.message ? (
-                      <span title={job.message}>{job.message.slice(0, 48)}{job.message.length > 48 ? '…' : ''}</span>
-                    ) : (
-                      '—'
+                  <div className="dataset-refresh">
+                    {throttledTarget === d.id && (
+                      <span className="throttle-note">Throttled, please try again in a bit.</span>
                     )}
+                    <button
+                      type="button"
+                      className="btn sm"
+                      disabled={refresh.isPending}
+                      onClick={() => refresh.mutate(d.id)}
+                    >
+                      Refresh
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    className="btn sm"
-                    disabled={refresh.isPending}
-                    onClick={() => refresh.mutate(d.id)}
-                  >
-                    Refresh
-                  </button>
                 </div>
               );
             })}
           </div>
-          {ratesQ.data && (
-            <p className="freshness-line">
-              FX provider: {ratesQ.data.provider} · as of{' '}
-              {new Date(ratesQ.data.asOf).toLocaleString()}
-              {ratesQ.data.fromCache ? ' · cached' : ''}
-              {statusQ.data?.autoRefreshStaleHours != null && (
-                <>
-                  {' '}
-                  · Auto-refresh after {statusQ.data.autoRefreshStaleHours}h (check every{' '}
-                  {statusQ.data.autoRefreshCheckMinutes ?? 60}m)
-                </>
-              )}
-            </p>
-          )}
         </section>
 
         <section className="panel">
           <div className="panel-header">
-            <h3>Server / LAN</h3>
+            <div>
+              <h3>On this network</h3>
+              <p className="muted" style={{ margin: '0.35rem 0 0', fontSize: '0.85rem' }}>
+                Open PSLedger from another device on the same network.
+              </p>
+            </div>
           </div>
           {statusQ.data && (
             <>
-              <p className="mono" style={{ margin: '0 0 0.75rem', fontSize: '0.85rem' }}>
-                Bound to {statusQ.data.bindHost}:{statusQ.data.port}
+              <p className="muted" style={{ margin: '0 0 0.75rem', fontSize: '0.85rem' }}>
+                Listening on port {statusQ.data.port}
               </p>
-              <ul style={{ margin: '0 0 0.75rem', paddingLeft: '1.1rem' }}>
+              <ul className="settings-list">
                 {statusQ.data.lanUrls.map((u) => (
-                  <li key={u} style={{ marginBottom: 4 }}>
+                  <li key={u}>
                     <a href={u}>{u}</a>
                   </li>
                 ))}
@@ -183,47 +271,51 @@ export function SettingsPage() {
           )}
         </section>
 
-        <section className="panel">
+        <section className="panel span-all">
           <div className="panel-header">
-            <h3>Preferences</h3>
+            <div>
+              <h3>PSN wallets</h3>
+              <p className="muted" style={{ margin: '0.35rem 0 0', fontSize: '0.85rem' }}>
+                Saved on this browser only. Other people using this site keep their own balances.
+              </p>
+            </div>
           </div>
-          <label className="check-label" style={{ marginBottom: '1.25rem' }}>
-            <input
-              type="checkbox"
-              checked={Boolean(prefsQ.data?.useGiftCardsDefault)}
-              onChange={(e) =>
-                savePrefs.mutate({ useGiftCardsDefault: e.target.checked })
-              }
-            />
-            Default “Use gift card cost” on Price Comparison
-          </label>
-
-          <p className="section-title" style={{ marginTop: '0.5rem' }}>
-            Starred concept IDs
-          </p>
-          <p className="muted" style={{ fontSize: '0.85rem', margin: '0 0 0.75rem' }}>
-            PlayStation concept IDs (one per line or comma-separated) for the Popular Games view.
-          </p>
-          <textarea
-            className="input"
-            value={starInput || (prefsQ.data?.starredConcepts ?? []).join('\n')}
-            onChange={(e) => setStarInput(e.target.value)}
-            placeholder="10002456"
-          />
-          <button
-            type="button"
-            className="btn"
-            style={{ marginTop: 10 }}
-            onClick={() => {
-              const ids = (starInput || (prefsQ.data?.starredConcepts ?? []).join('\n'))
-                .split(/[\s,]+/)
-                .map((s) => s.trim())
-                .filter(Boolean);
-              savePrefs.mutate({ starredConcepts: ids });
-            }}
-          >
-            Save starred concepts
-          </button>
+          <div className="wallet-grid">
+            {LOCAL_WALLET_REGIONS.map((w) => {
+              const minor = wallets[w.region];
+              const shown =
+                walletDraft[w.region] ??
+                (w.currency === 'JPY' ? String(minor) : String(minor / 100));
+              return (
+                <label key={w.region} className="wallet-field">
+                  <span className="gc-amount-label">
+                    {WALLET_NAMES[w.region] ?? w.region}
+                    <span className="muted"> · {w.currency}</span>
+                  </span>
+                  <input
+                    className="input"
+                    inputMode="decimal"
+                    placeholder="0"
+                    value={shown}
+                    onChange={(e) =>
+                      setWalletDraft((prev) => ({ ...prev, [w.region]: e.target.value }))
+                    }
+                  />
+                  <button
+                    type="button"
+                    className="btn sm"
+                    style={{ marginTop: 8 }}
+                    onClick={() => saveWallet(w.region, w.currency, shown)}
+                  >
+                    Save
+                  </button>
+                  <span className="muted" style={{ fontSize: '0.75rem' }}>
+                    {formatMoney(moneyFromMinor(minor, w.currency))}
+                  </span>
+                </label>
+              );
+            })}
+          </div>
         </section>
       </div>
     </div>

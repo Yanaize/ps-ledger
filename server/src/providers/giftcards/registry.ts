@@ -30,7 +30,7 @@ export interface GiftCardProvider {
   getProductUrl(listing: { productKey: string }): string;
 }
 
-const ENEBA_REGION_SLUG: Record<PriceRegion, string> = {
+const ENEBA_REGION_SLUG: Partial<Record<PriceRegion, string>> = {
   JP: 'japan',
   IN: 'india',
   TR: 'turkey',
@@ -52,6 +52,7 @@ export class EnebaWebProvider implements GiftCardProvider {
 
   async fetchListings(region: PriceRegion): Promise<RawGiftCardListing[]> {
     const slug = ENEBA_REGION_SLUG[region];
+    if (!slug) return [];
     // robots.txt allows /store/... ; /search is disallowed — do not use search URLs
     const url = `https://www.eneba.com/store/gift-cards?drms[]=psn&regions[]=${slug}`;
     const res = await this.http.get(url, {
