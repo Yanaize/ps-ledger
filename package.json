@@ -1,0 +1,24 @@
+{
+  "name": "ps-price-compare",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "workspaces": [
+    "shared",
+    "server",
+    "web"
+  ],
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,green \"npm run dev -w server\" \"npm run dev -w web\"",
+    "build": "npm run build -w web",
+    "start": "npm run start -w server",
+    "test": "npm run test -w shared && npm run test -w server",
+    "lan-ip": "tsx scripts/lan-ip.ts",
+    "smoke-lan": "tsx scripts/smoke-lan.ts"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1",
+    "tsx": "^4.20.5",
+    "typescript": "~5.9.2"
+  }
+}
